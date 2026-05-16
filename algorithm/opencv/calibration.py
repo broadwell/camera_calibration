@@ -6,6 +6,7 @@ from visualization.checkerboard import show_cb_image_with_detected_corners, draw
 from algorithm.general.feature_analysis import define_XYZ_coordinate_system
 from algorithm.general.calib import CameraCalib
 
+from scipy.spatial.transform import Rotation
 
 def calibrate_with_opencv(input_files: dict, config: dict):
     """
@@ -15,6 +16,28 @@ def calibrate_with_opencv(input_files: dict, config: dict):
     """
     opencvcalib = OpenCVcalib(input_files, config)
     opencvcalib()
+
+
+def average_quaternions(quaternions):
+    print("Shape of quaternions", quaternions.shape)
+    # Number of quaternions
+    N = quaternions.shape[0]
+
+    # Calculate the outer product sum for all quaternions
+    A = np.zeros((4, 4))
+    for q in quaternions:
+        print("Single quaternion: ", q)
+        A += np.outer(q, q)
+
+    # Scale by 1/N
+    A /= N
+
+    # Get eigenvalues and eigenvectors
+    eigenvalues, eigenvectors = np.linalg.eig(A)
+
+    # The average quaternion is the eigenvector with the largest eigenvalue
+    average_quat = eigenvectors[:, np.argmax(eigenvalues)]
+    return average_quat
 
 
 class OpenCVcalib(CameraCalib):
@@ -47,6 +70,8 @@ class OpenCVcalib(CameraCalib):
                 )
             else:
                 print(f"Corners are not detected ({img_file.name})")
+
+        rotation_quaternions = []
 
         num_valid_files = len(self.points2d)  # Number of files where checkerboard corners are detected.
         points3d = num_valid_files * [self.points3d]   # 3D point in space
@@ -126,8 +151,27 @@ class OpenCVcalib(CameraCalib):
             print(f"[R | t]:\n{Rt}")
             print("Rot. vec: ", rvecs[i].flatten(), "\n")
 
+            rmatrix, _ = cv.Rodrigues(rvecs[i])
+            # Convert Rotation Matrix to Quaternion (w, x, y, z)
+            rotation = Rotation.from_matrix(rmatrix)
+            quaternion = rotation.as_quat()
+            rotation_quaternions.append(quaternion)
+
         print("- Mean reprojection error")
         print(f" Overall: {np.mean(reprojection_error):.5f}")  # Averaging reprojection errors over all images
+
+        # Average rotation matrices/quaterions and tvecs
+        all_quats = np.array(rotation_quaternions)
+
+        avg_quat = average_quaternions(all_quats)
+        avg_tvec = np.mean(tvecs, axis=0)
+
+        avg_rotation = Rotation.from_quat(avg_quat)
+        avg_rmat = avg_rotation.as_matrix()
+
+        print("AVERAGE ROTATION MATRIX:\n", avg_rmat)
+        print("AVERAGE ROTATION QUATERNION:\n", avg_quat)
+        print("AVERAGE TRANSLATION VECTOR:", avg_tvec.flatten())
 
         plt.figure()
         plt.bar(
